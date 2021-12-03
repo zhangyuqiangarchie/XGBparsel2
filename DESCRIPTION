@@ -1,0 +1,23 @@
+Package: XGBparsel
+Title: Automatic parameter adjustment method for xgb.cv
+Version: 0.0.0.9000
+Authors@R: 
+    person(given = "archiez",
+           family = "archiez",
+           role = c("aut", "cre"),
+           email = "1456374805@qq.com",
+           comment = c(ORCID = "YOUR-ORCID-ID"))
+Description: Automatic parameter adjustment method for xgb.cv is to find relatively
+         great parameters for xgboost algorithm.It contains three functions:
+         xgb.auc,xgb.rmse,conf.matrix.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.1
+Imports: stats,xgboost,Matrix
+Depends: R (>= 2.10)
+NeedsCompilation: no
+Author: archiez [aut, cre] (YOUR-ORCID-ID)
+Maintainer: archiez <1456374805@qq.com>
+Packaged: 2021-12-02 12:17:55 UTC; wxq123

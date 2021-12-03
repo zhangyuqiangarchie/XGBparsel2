@@ -1,0 +1,213 @@
+---
+title: "vignettes"
+author: "archiez"
+date: "2021/12/02"
+output: html_vignette
+vignette: >
+  %\VignetteIndexEntry{my-vignette}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+The data set is the evaluation data of the quality of a red wine in Portugal in 2009. The first eleven indicators are self physical and chemical tests, and the twelfth red wine quality scoring index is based on subjective evaluation. These eleven indicators are fixed.acid, volatile.acid, city.acid, residual.sugar, chlorides, free.sulfur.dioxide, total.sulfur.dioxide, density, pH, sulphates and alcohol. The twelfth indicator is quailty, which is the quality of red wine.
+
+Research question: for this data set, xgboost algorithm is used to classify the quality of red wine. Compare the classification results of xgboost, random forest, logistic regression and three algorithms.
+```{r,results="hide"}
+###########################library###########################
+
+library(tidyverse)
+library(lattice)
+library(pROC)
+library(caret)
+library(XGBparsel)
+library(xgboost)
+library(ggplot2)
+library(ggpubr)
+```
+
+```{r}
+###########################Data preprocessing###########################
+
+#Read CSV data to R
+redwine <- read.csv(file = "E:\\系统默认\\桌面\\red_wine_quality_data.csv",header = TRUE)
+
+#Check whether there are missing values for each variable
+apply(redwine, 2, function(x) any(is.na(x)))
+
+#View the descriptive statistics and variable types of each variable
+summary(redwine)
+str(redwine)
+
+#Generate a new variable grade to represent the ordinary and high quality of red wine, and assign values of 0 and 1 respectively
+redwine$grade[redwine$quality <= 5] <- "0"
+redwine$grade[redwine$quality >= 6] <- "1"
+
+#Delete variable quality
+myvars <- names(redwine) %in% "quality"
+redwine <- redwine[!myvars]
+
+#Divide training set and test set
+set.seed(996)
+sampled <- sample(1:nrow(redwine),nrow(redwine)*0.75,replace=F)
+redwine_train <- redwine[sampled,]
+redwine_test <- redwine[-sampled,]
+
+#Convert the dataset to the form required by xgboost
+redwine_train_s <- Matrix::sparse.model.matrix( grade~.-1 ,data = redwine_train[,1:12])
+redwine_test_s <- Matrix::sparse.model.matrix( grade~.-1 ,data = redwine_test[,1:12])
+dtrain <- xgb.DMatrix( data = redwine_train_s , label = redwine_train$grade )
+dtest <- xgb.DMatrix( data = redwine_test_s , label = redwine_test$grade)
+```
+
+The preprocessing part briefly describes the data, and it can be seen that there is no missing data. In addition, according to the quality of red wine, a new binary variable grade with values of 0 and 1 is created, and the variable quaility that will not be included in the analysis is deleted for the subsequent modeling form of xgboost.
+
+The preprocessing part uses the sample function to classify 75% of the data as the training set and 25% as the test set. And the data is transformed into XGB. Dmatrix matrix suitable for xgboost algorithm.
+
+```{r,results="hide"}
+################Xgboost, random forest and logistic were used for training###########
+
+#Function auto tuning using xgbparsel package
+outcome <-xgb.auc(dtrain,100,cvround=10000,cvfold=5,
+                  early_stopping_rounds =1000,seed.number = 996,
+                  nthread = 8)
+outcome
+```
+
+Parameter selection of xgb.auc function: the number of cycles is 100, the number of initial iterations is 10000, and 50% cross validation. If the AUC does not increase after 1000 times, the iteration stops, the random seed is 996, and the number of threads used is 8.
+
+About the xgb.auc function in xgbparsel package: the cross validation function xgb.cv in xgboost package only performs cross validation and does not select relatively excellent parameters. In order to overcome this problem, xgb.auc is an automatic parameter adjustment function suitable for binary classification. The function creates a cycle with the number of N and the parameter max_ Depth is randomly selected from 6-10. Parameter ETA follows a uniform distribution of 0.01-0.3, parameter gamma follows a uniform distribution of 0-0.2, parameter subsample follows a uniform distribution of 0.6-0.9, and parameter colsample follows a uniform distribution_ Bytree obeys the uniform distribution of 0.5-0.8, parameter min_ child_ Weight randomly selected from 1-40, parameter Max_ delta_ Step is randomly selected from 1-10. The value range of all parameters is the typical parameter value in xgboost algorithm. Through cross validation, the parameters corresponding to the maximum AUC on the test set are selected, and the optimal parameters are obtained through continuous iteration.
+
+The xgbparsel package also comes with the function xgb.rmse. The principle of this function is similar to xgb.auc. But the difference is that xgb.rmse is used for regression rather than classification.
+
+```{r}
+#Modeling using xgboost algorithm
+nround = outcome$best_auc_index
+set.seed(996)
+xgbfit <- xgb.train(data=dtrain, params=outcome$best_param, nrounds=nround, nthread=8)
+```
+
+The classical machine learning package caret is used for ten fold cross validation to select the optimal parameters. This part uses two algorithms for classification, ramdomforest and logistic regression. It is used to compare the classification effect with xgboost algorithm.
+
+```{r}
+#Ten fold cross validation
+control <- trainControl(method = 'repeatedcv', number =10,repeats =10, savePredictions
+                        =T)
+
+#Modeling using random forest algorithm
+set.seed(996)
+rffit <- train(grade ~ fixed.acidity+volatile.acidity+citric.acid+residual.sugar+chlorides+free.sulfur.dioxide+total.sulfur.dioxide+density+pH+sulphates+alcohol,
+               data=redwine_train,
+               method='rf',
+               trControl=control,
+               tuneLength = 2)
+
+#Logistic regression modeling was used
+set.seed(996)
+logfit <- train(grade ~ fixed.acidity+volatile.acidity+citric.acid+residual.sugar+chlorides+free.sulfur.dioxide+total.sulfur.dioxide+density+pH+sulphates+alcohol,
+                data=redwine_train,
+                method='glm',family='binomial',
+                trControl=control,
+                tuneLength = 2)
+
+
+################Xgboost, random forest and logistic were used for prediction###########
+
+
+redwine_train$xgbpre <- predict(xgbfit,dtrain)
+redwine_test$xgbpre <- predict(xgbfit,dtest)
+
+
+redwine_test$rfpre <- predict(rffit,redwine_test,type = "prob")
+redwine_train$rfpre <- predict(rffit,redwine_train,type = "prob")
+
+redwine_train$logitpre <- predict(logfit,redwine_train,type = "prob")
+redwine_test$logitpre <- predict(logfit,redwine_test,type = "prob")
+
+
+###########################Draw confusion matrix###########################
+
+#
+Matrix_xgb_train <- conf.matrix(0.5,redwine_train$xgbpre,tarvar = redwine_train$grade)
+Matrix_xgb_test <-conf.matrix(0.5,redwine_test$xgbpre,tarvar = redwine_test$grade)
+Matrix_xgb_train
+Matrix_xgb_test
+
+#
+Matrix_rf_train <- conf.matrix(0.5,redwine_train$rfpre[,2],tarvar = redwine_train$grade)
+Matrix_rf_test <- conf.matrix(0.5,redwine_test$rfpre[,2],tarvar = redwine_test$grade)
+Matrix_rf_train
+Matrix_rf_test
+
+#
+Matrix_logit_train <- conf.matrix(0.5,redwine_train$logitpre[,2],tarvar = redwine_train$grade)
+Matrix_logit_test <- conf.matrix(0.5,redwine_test$logitpre[,2],tarvar = redwine_test$grade)
+Matrix_logit_train
+Matrix_logit_test
+```
+
+About the function conf.matrix in the xgbparsel package: this function can create a confusion matrix between real values and predicted values.
+
+Through the confusion matrix, we can see that the error rate of xgboost is very close to that of RF, and lower than that of logistic regression.
+
+It can be seen that the result of xgboost is similar to that of random forest, but better than that of logistic regression.
+```{r}
+###########################Draw ROC curve###########################
+
+#
+roca <- roc(redwine_test$grade,redwine_test$xgbpre)
+rocb <- roc(redwine_train$grade,redwine_train$xgbpre)
+xgb_roc_curve <- list('test ROC'=roca,'train ROC'=rocb) %>% 
+                   ggroc(.,size=1)+
+                   geom_segment(aes(x=1,y=0,xend=0,yend=1),color='black',linetype='solid')+
+                   theme(legend.title=element_blank()) 
+
+#
+rocc <- roc(redwine_test$grade,redwine_test$rfpre[,2])
+rocd <- roc(redwine_train$grade,redwine_train$rfpre[,2])
+rf_roc_curve <- list('test ROC'=rocc,'train ROC'=rocd) %>% 
+                  ggroc(.,size=1)+
+                  geom_segment(aes(x=1,y=0,xend=0,yend=1),color='black',linetype='solid')+
+                  theme(legend.title=element_blank()) 
+
+#
+roce <- roc(redwine_test$grade,redwine_test$logitpre[,2])
+rocf <- roc(redwine_train$grade,redwine_train$logitpre[,2])
+logit_roc_curve <- list('test ROC'=roce,'train ROC'=rocf) %>% 
+                     ggroc(.,size=1)+
+                     geom_segment(aes(x=1,y=0,xend=0,yend=1),color='black',linetype='solid')+
+                     theme(legend.title=element_blank()) 
+
+#
+ggarrange(xgb_roc_curve,rf_roc_curve,logit_roc_curve,ncol=2,nrow=2,labels=c("xgb","rf","logit"))
+
+
+###########################AUC###########################
+
+#
+xgb_test_auc <- auc(roca)
+xgb_train_auc <- auc(rocb)
+
+#
+rf_test_auc <- auc(rocc)
+rf_train_auc <- auc(rocd)
+
+#
+logit_train_auc <- auc(rocf)
+logit_test_auc <- auc(roce)
+
+#
+
+ID <- c("xgb","rf","logit")
+train_auc <- c(xgb_train_auc,rf_train_auc,logit_train_auc)
+test_auc <- c(xgb_test_auc,rf_test_auc,logit_test_auc)
+auc <- data.frame(ID,train_auc,test_auc)
+auc
+```
+
+It can also be seen from the AUC value and ROC curve that the AUC of xgboost on the test set is about 0.85. It achieves a better classification effect, which is similar to random forest algorithm, but better than logistic regression.
+
+Conclusion: the red wine data is divided into training set and test set, which are modeled by xgboost algorithm, random forest algorithm and logistic regression algorithm respectively. The results show that the classification effect of xgboost algorithm is very good, the AUC value on the training set is close to 1, and the AUC on the test set is about 0.85. Compared with the random forest algorithm, although the accuracy is slightly poor, it is very close, which may be affected by the parameter setting. Compared with logistic regression, xgboost algorithm has better results.
+
+
+
